@@ -32,5 +32,8 @@ using Normal3i = Normal3<int>;
 
 using Bounds3f = Bounds3<Float>;
 
+class SampledSpectrum;
+class SampledWavelengths;
+
 void init();
 void cleanup();

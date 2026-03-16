@@ -16,6 +16,7 @@ set(CORE_SRCS
     src/util/transform.cpp
     src/render/render.cpp
     src/raytracer.cpp
+    src/util/color.cpp
 )
 
 add_library(raytracer_core STATIC ${CORE_SRCS})

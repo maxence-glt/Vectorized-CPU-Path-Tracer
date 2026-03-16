@@ -65,7 +65,7 @@ void render(const Scene &scene) {
         threads.emplace_back([&](){
             while (true) {
                 int i = nextTile.fetch_add(1);
-                if (i >= tiles.size()) break;
+                if (i >= (int)tiles.size()) break;
                 renderThread(scene, tiles[i], xres, yres, channels, pixels);
 
                 int left = tilesLeft.fetch_sub(1, std::memory_order_relaxed) - 1;

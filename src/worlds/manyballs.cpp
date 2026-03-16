@@ -1,6 +1,6 @@
 #include "../camera.h"
 #include "../hittable_list.h"
-#include "../color.h"
+#include "../util/color.hpp"
 #include "../sphere.h"
 #include "../util/profiler.hpp"
 #include "../util/random.hpp"
@@ -56,7 +56,7 @@ Scene manyBalls() {
 
     cam.aspect_ratio      = 16.0 / 9.0;
     cam.image_width       = 800;
-    cam.samples_per_pixel = 10;
+    cam.samples_per_pixel = 1;
     cam.max_depth         = 50;
 
     cam.vfov     = 20;

@@ -4,7 +4,7 @@
 #include "hittable.h"
 #include "util/profiler.hpp"
 #include "util/vecmath.hpp"
-#include "color.h"
+#include "util/color.hpp"
 #include "raytracer.hpp"
 
 struct material {
