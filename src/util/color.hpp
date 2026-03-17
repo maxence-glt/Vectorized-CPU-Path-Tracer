@@ -9,6 +9,7 @@
 #include <OpenImageIO/imageio.h>
 #include <cmath>
 
+void spectrumInit();
 
 using color = Vector3f;
 
@@ -50,36 +51,6 @@ class SampledSpectrum;
 class SampledWavelengths;
 
 // TODO: replace OOP approach
-class Spectrum {
-public:
-    virtual ~Spectrum() = default;
-    virtual Float operator()(Float lambda) const = 0;
-    virtual Float MaxValue() const = 0;
-    virtual SampledSpectrum Sample(const SampledWavelengths &lambda) const;
-};
-
-class ConstantSpectrum : public Spectrum {
-public:
-    ConstantSpectrum(Float c) : c(c) {}
-    Float operator()(Float lambda) const { return c; }
-    SampledSpectrum Sample(const SampledWavelengths &) const;
-    Float MaxValue() const { return c; }
-
-private:
-    Float c;
-};
-
-class DenselySampledSpectrum {
-public:
-    DenselySampledSpectrum(int lambda_min = Lambda_min, int lambda_max = Lambda_max,
-                           Allocator alloc = {})
-        : lambda_min(lambda_min),
-          lambda_max(lambda_max),
-          values(lambda_max - lambda_min + 1, alloc) {}
-private:
-    int lambda_min, lambda_max;
-    std::vector<Float> values;
-};
 
 class SampledWavelengths {
 public:
@@ -117,7 +88,7 @@ public:
     explicit SampledSpectrum(Float c) { values.fill(c); }
 
     SampledSpectrum(std::span<const Float> v) {
-        DCHECK_EQ(NSpectrumSamples, v.size());
+        DCHECK_EQ(nSpectrumSamples, v.size());
         for (int i = 0; i < nSpectrumSamples; ++i)
             values[i] = v[i];
     }
@@ -138,44 +109,130 @@ public:
         return false;
     }
 
+    SampledSpectrum &operator*=(const SampledSpectrum &s) {
+        for (int i = 0; i < nSpectrumSamples; ++i)
+            values[i] *= s.values[i];
+        return *this;
+    }
+    SampledSpectrum operator*(const SampledSpectrum &s) const {
+        SampledSpectrum ret = *this;
+        return ret *= s;
+    }
+
 private:
     std::array<Float, nSpectrumSamples> values;
 };
 
-class PiecewiseLinearSpectrum {
-  public:
+class Spectrum {
+public:
+    virtual ~Spectrum() = default;
+    virtual Float operator()(Float lambda) const = 0;
+    virtual Float MaxValue() const = 0;
+    virtual SampledSpectrum Sample(const SampledWavelengths &lambda) const = 0;
+};
+
+class ConstantSpectrum : public Spectrum {
+public:
+    ConstantSpectrum(Float c) : c(c) {}
+    Float operator()(Float lambda) const { return c; }
+    SampledSpectrum Sample(const SampledWavelengths &) const;
+    Float MaxValue() const { return c; }
+
+private:
+    Float c;
+};
+
+class PiecewiseLinearSpectrum : public Spectrum {
+public:
     PiecewiseLinearSpectrum() = default;
+    PiecewiseLinearSpectrum(std::span<const Float> l,
+                            std::span<const Float> v)
+    : lambdas(l.begin(), l.end()), values(v.begin(), v.end()) 
+    {/* empty ctor */}
+
+    PiecewiseLinearSpectrum &operator=(const PiecewiseLinearSpectrum &other) = default;
 
     void Scale(Float s) {
         for (Float &v : values)
             v *= s;
     }
 
-    Float MaxValue() const;
+    Float operator()(Float lambda) const override {
+        if (lambdas.empty() || lambda < lambdas.front() || lambda > lambdas.back())
+            return 0;
 
-    SampledSpectrum Sample(const SampledWavelengths &lambda) const {
+        int o = findInterval(lambdas.size(), [&](int i) { return lambdas[i] <= lambda; });
+        DCHECK(lambda >= lambdas[o] && lambda <= lambdas[o + 1]);
+        Float t = (lambda - lambdas[o]) / (lambdas[o + 1] - lambdas[o]);
+        return lerp(t, values[o], values[o + 1]);
+    }
+
+    SampledSpectrum Sample(const SampledWavelengths &lambda) const override {
         SampledSpectrum s;
         for (int i = 0; i < nSpectrumSamples; ++i)
             s[i] = (*this)(lambda[i]);
         return s;
     }
-    Float operator()(Float lambda) const;
+
+    Float MaxValue() const override {
+        if (values.empty())
+            return 0;
+        return *std::max_element(values.begin(), values.end());
+    }
 
     std::string ToString() const;
 
-    PiecewiseLinearSpectrum(std::span<const Float> lambdas,
-                            std::span<const Float> values);
-
     static std::optional<Spectrum> Read(const std::string &filename);
 
-    static PiecewiseLinearSpectrum *FromInterleaved(std::span<const Float> samples,
+    static PiecewiseLinearSpectrum *fromInterleaved(std::span<const Float> samples,
                                                     bool normalize=true);
 
-  private:
+private:
     std::vector<Float> lambdas, values;
 };
 
+class DenselySampledSpectrum : public Spectrum {
+public:
+    DenselySampledSpectrum() = default;
 
+    DenselySampledSpectrum(const PiecewiseLinearSpectrum &spec) 
+    : values(int(Lambda_max - Lambda_min + 1)) {
+        for (int lambda = Lambda_min; lambda <= Lambda_max; ++lambda)
+            values[lambda - Lambda_min] = spec(lambda);
+    }
+
+    Float operator()(Float lambda) const override {
+        DCHECK_GT(lambda, 0);
+        int offset = std::lround(lambda) - Lambda_min;
+        if (offset < 0 || offset >= values.size())
+            return 0;
+        return values[offset];
+    }
+
+    SampledSpectrum Sample(const SampledWavelengths &lambda) const override {
+        SampledSpectrum s;
+        for (int i = 0; i < nSpectrumSamples; ++i) {
+            int offset = std::lround(lambda[i]) - Lambda_min;
+            if (offset < 0 || offset >= values.size())
+                s[i] = 0;
+            else
+                s[i] = values[offset];
+        }
+        return s;
+    }
+
+    DenselySampledSpectrum(Spectrum *spec)
+        : values(Lambda_max - Lambda_min + 1) {
+        if (spec)
+            for (int lambda = Lambda_min; lambda <= Lambda_max; ++lambda)
+                values[lambda - Lambda_min] = (*spec)(lambda);
+    }
+
+    Float MaxValue() const override{ return *std::max_element(values.begin(), values.end()); }
+
+private:
+    std::vector<Float> values;
+};
 
 class RGB {
 public:
@@ -208,6 +265,46 @@ class XYZ {
 public:
     XYZ() = default;
     XYZ(Float X, Float Y, Float Z) : X(X), Y(Y), Z(Z) {}
+
+    Point2f xy() const { return Point2f(X / (X + Y + Z), Y / (X + Y + Z)); }
+
+    static XYZ fromxyY(Point2f xy, Float Y = 1) {
+        if (xy.y == 0)
+            return XYZ(0, 0, 0);
+        return XYZ(xy.x * Y / xy.y, Y, (1 - xy.x - xy.y) * Y / xy.y);
+    }
+
+    Float &operator[](int c) {
+        DCHECK(c >= 0 && c < 3);
+        if (c == 0)
+            return X;
+        else if (c == 1)
+            return Y;
+        return Z;
+    }
+
+    Float operator[](int c) const {
+        DCHECK(c >= 0 && c < 3);
+        if (c == 0)
+            return X;
+        else if (c == 1)
+            return Y;
+        return Z;
+    }
+
+    XYZ &operator/=(Float a) {
+        DCHECK(!IsNaN(a));
+        DCHECK_NE(a, 0);
+        X /= a;
+        Y /= a;
+        Z /= a;
+        return *this;
+    }
+
+    XYZ operator/(Float a) const {
+        XYZ ret = *this;
+        return ret /= a;
+    }
 
     Float X = 0, Y = 0, Z = 0;
 };
@@ -267,6 +364,61 @@ inline size_t FindInterval(size_t sz, const Predicate &pred) {
     return (size_t)clamp((ssize_t)first - 1, 0, sz - 2);
 }
 
+
+class RGBColorSpace {
+public:
+    RGBColorSpace(Point2f r, Point2f g, Point2f b, Spectrum *illuminant,
+                  const RGBToSpectrumTable *rgbToSpectrumTable);
+
+
+    RGBSigmoidPolynomial ToRGBCoeffs(RGB rgb) const {
+        DCHECK(rgb.r >= 0 && rgb.g >= 0 && rgb.b >= 0);
+        return (*rgbToSpectrumTable)(RGB(std::max<Float>(0, rgb.r), std::max<Float>(0, rgb.g),
+                                         std::max<Float>(0, rgb.b)));
+    }
+
+    SampledSpectrum RGBToSpectrum(RGB rgb, const SampledWavelengths &lambda) const {
+        RGBSigmoidPolynomial poly = ToRGBCoeffs(rgb);
+        SampledSpectrum s;
+        for (int i = 0; i < nSpectrumSamples; ++i)
+            s[i] = poly(lambda[i]);
+        return s;
+    }
+
+    static void Init();
+
+    // RGBColorSpace Public Members
+    Point2f r, g, b, w;
+    DenselySampledSpectrum illuminant;
+    SquareMatrix<3> XYZFromRGB, RGBFromXYZ;
+    static const RGBColorSpace *DCI_P3;
+
+    bool operator==(const RGBColorSpace &cs) const {
+        return (r == cs.r && g == cs.g && b == cs.b && w == cs.w &&
+                rgbToSpectrumTable == cs.rgbToSpectrumTable);
+    }
+    bool operator!=(const RGBColorSpace &cs) const {
+        return (r != cs.r || g != cs.g || b != cs.b || w != cs.w ||
+                rgbToSpectrumTable != cs.rgbToSpectrumTable);
+    }
+
+    std::string ToString() const;
+
+    RGB LuminanceVector() const {
+        return RGB(XYZFromRGB[1][0], XYZFromRGB[1][1], XYZFromRGB[1][2]);
+    }
+
+    RGB ToRGB(XYZ xyz) const { return mul<RGB>(RGBFromXYZ, xyz); }
+    XYZ ToXYZ(RGB rgb) const { return mul<XYZ>(XYZFromRGB, rgb); }
+
+    static const RGBColorSpace *GetNamed(std::string name);
+    static const RGBColorSpace *Lookup(Point2f r, Point2f g, Point2f b, Point2f w);
+
+  private:
+    const RGBToSpectrumTable *rgbToSpectrumTable;
+};
+
+
 RGBSigmoidPolynomial inline RGBToSpectrumTable::operator()(RGB rgb) const {
     DCHECK(rgb[0] >= 0.f && rgb[1] >= 0.f && rgb[2] >= 0.f && rgb[0] <= 1.f &&
            rgb[1] <= 1.f && rgb[2] <= 1.f);
@@ -306,10 +458,9 @@ RGBSigmoidPolynomial inline RGBToSpectrumTable::operator()(RGB rgb) const {
     return RGBSigmoidPolynomial(c[0], c[1], c[2]);
 }
 
+extern PiecewiseLinearSpectrum *illumd65;
 
 namespace Spectra {
-
-DenselySampledSpectrum *x, *y, *z;
 
 inline const DenselySampledSpectrum &X() {
     extern DenselySampledSpectrum *x;

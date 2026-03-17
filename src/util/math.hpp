@@ -84,6 +84,28 @@ inline void init(Mat& m, int i, int j, V v, Args... args) {
     init<N>(m, i, j, args...);
 }
 
+template <typename Predicate>
+inline size_t findInterval(size_t sz, const Predicate &pred) {
+    using ssize_t = std::make_signed_t<size_t>;
+    ssize_t size = (ssize_t)sz - 2, first = 1;
+    while (size > 0) {
+        size_t half = (size_t)size >> 1, middle = first + half;
+        bool predResult = pred(middle);
+        first = predResult ? middle + 1 : first;
+        size = predResult ? size - (half + 1) : half;
+    }
+    return (size_t)clamp((ssize_t)first - 1, 0, sz - 2);
+}
+
+template <int N>
+inline void initDiag(SquareMatrixType<N > &m, int i) {}
+
+template <int N, typename... Args>
+inline void initDiag(SquareMatrixType<N> &m, int i, Float v, Args... args) {
+    m[i][i] = v;
+    initDiag<N>(m, i + 1, args...);
+}
+
 template <int N>
 class SquareMatrix {
 public:
@@ -191,6 +213,14 @@ public:
         return std::span<Float, N>(m[i].data(), N);
     }
 
+    template <typename... Args>
+    static SquareMatrix diag(Float v, Args... args) {
+        CHECK(1 + sizeof...(Args) == N);
+        SquareMatrix m;
+        initDiag<N>(m.m, 0, v, args...);
+        return m;
+    }
+
     const SquareMatrixType<N>& getMatrix() const { return m; }
     SquareMatrixType<N>& getMatrix() { return m; }
 
@@ -216,6 +246,24 @@ public:
 private:
     SquareMatrixType<N> m{};
 };
+
+
+template <typename Tresult, int N, typename T>
+inline Tresult mul(const SquareMatrix<N> &m, const T &v) {
+    Tresult result;
+    for (int i = 0; i < N; ++i) {
+        result[i] = 0;
+        for (int j = 0; j < N; ++j)
+            result[i] += m[i][j] * v[j];
+    }
+    return result;
+}
+
+
+template <int N, typename T>
+inline T operator*(const SquareMatrix<N> &m, const T &v) {
+    return mul<T>(m, v);
+}
 
 template <int N>
 inline SquareMatrix<N> operator*(Float s, const SquareMatrix<N> &M) {
@@ -268,6 +316,34 @@ inline bool SquareMatrix<N>::isIdentity() const {
     return true;
 }
 
+inline Float determinant(const SquareMatrix<3> &m) {
+    Float minor12 = differenceOfProducts(m[1][1], m[2][2], m[1][2], m[2][1]);
+    Float minor02 = differenceOfProducts(m[1][0], m[2][2], m[1][2], m[2][0]);
+    Float minor01 = differenceOfProducts(m[1][0], m[2][1], m[1][1], m[2][0]);
+    return std::fma(m[0][2], minor01,
+               differenceOfProducts(m[0][0], minor12, m[0][1], minor02));
+}
+
+inline std::optional<SquareMatrix<3>> inverse(const SquareMatrix<3> &m) {
+    Float det = determinant(m);
+    if (det == 0)
+        return {};
+    Float invDet = 1 / det;
+
+    SquareMatrix<3> r;
+
+    r[0][0] = invDet * differenceOfProducts(m[1][1], m[2][2], m[1][2], m[2][1]);
+    r[1][0] = invDet * differenceOfProducts(m[1][2], m[2][0], m[1][0], m[2][2]);
+    r[2][0] = invDet * differenceOfProducts(m[1][0], m[2][1], m[1][1], m[2][0]);
+    r[0][1] = invDet * differenceOfProducts(m[0][2], m[2][1], m[0][1], m[2][2]);
+    r[1][1] = invDet * differenceOfProducts(m[0][0], m[2][2], m[0][2], m[2][0]);
+    r[2][1] = invDet * differenceOfProducts(m[0][1], m[2][0], m[0][0], m[2][1]);
+    r[0][2] = invDet * differenceOfProducts(m[0][1], m[1][2], m[0][2], m[1][1]);
+    r[1][2] = invDet * differenceOfProducts(m[0][2], m[1][0], m[0][0], m[1][2]);
+    r[2][2] = invDet * differenceOfProducts(m[0][0], m[1][1], m[0][1], m[1][0]);
+
+    return r;
+}
 // ---- 4x4 inverse (your implementation, adapted to this SquareMatrix) ----
 inline std::optional<SquareMatrix<4>> inverse(const SquareMatrix<4>& m) {
     // Via: https://github.com/google/ion/blob/master/ion/math/matrixutils.cc,

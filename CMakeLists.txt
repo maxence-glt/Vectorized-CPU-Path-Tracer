@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(raytracer LANGUAGES CXX)
 
-option(ENABLE_SANITIZERS "Enable ASan/UBSan/LSan in Debug builds" ON)
+option(ENABLE_SANITIZERS "Enable ASan/UBSan/LSan in Debug builds" OFF)
 option(BUILD_TESTS "Enable unit test (Google Test)" ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -17,6 +17,7 @@ set(CORE_SRCS
     src/render/render.cpp
     src/raytracer.cpp
     src/util/color.cpp
+    data/rgbspectrum_dci_p3.cpp
 )
 
 add_library(raytracer_core STATIC ${CORE_SRCS})

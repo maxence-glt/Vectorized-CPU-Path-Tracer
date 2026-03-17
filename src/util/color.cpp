@@ -1,9 +1,14 @@
 #include "color.hpp"
 
-
 // parse from 
 constexpr int nCIESamples = 471;
 extern const Float CIE_lambda[nCIESamples];
+
+namespace Spectra {
+
+DenselySampledSpectrum *x, *y, *z;
+
+}
 
 const Float CIE_X[nCIESamples] = {
     // CIE X function values
@@ -368,7 +373,14 @@ const Float CIE_Illum_D65[] = {
     825.000000, 58.876499,  830.000000, 60.312500,
 };
 
-PiecewiseLinearSpectrum *PiecewiseLinearSpectrum::FromInterleaved(
+inline Float integrateSpectra(Spectrum *f, Spectrum *g) {
+    Float integral = 0;
+    for (Float lambda = Lambda_min; lambda <= Lambda_max; ++lambda)
+        integral += (*f)(lambda) * (*g)(lambda);
+    return integral;
+}
+
+PiecewiseLinearSpectrum *PiecewiseLinearSpectrum::fromInterleaved(
     std::span<const Float> samples, bool normalize) {
     CHECK_EQ(0, samples.size() % 2);
     int n = samples.size() / 2;
@@ -384,21 +396,56 @@ PiecewiseLinearSpectrum *PiecewiseLinearSpectrum::FromInterleaved(
     PiecewiseLinearSpectrum *spec = new PiecewiseLinearSpectrum(lambda, v);
 
     if (normalize)
-        // Normalize to have luminance of 1.
-        spec->Scale(CIE_Y_integral / spec * &Spectra::Y());
+        spec->Scale(CIE_Y_integral / (integrateSpectra(spec, Spectra::y)));
 
     return spec;
 }
 
+XYZ spectrumToXYZ(Spectrum *s) {
+    return XYZ(integrateSpectra(Spectra::x, s), integrateSpectra(Spectra::y, s),
+               integrateSpectra(Spectra::z, s)) /
+           CIE_Y_integral;
+}
+
+RGBColorSpace::RGBColorSpace(Point2f r, Point2f g, Point2f b, Spectrum *illuminant,
+                             const RGBToSpectrumTable *rgbToSpec)
+    : r(r), g(g), b(b), illuminant(illuminant), rgbToSpectrumTable(rgbToSpec) {
+    XYZ W = spectrumToXYZ(illuminant);
+    w = W.xy();
+    XYZ R = XYZ::fromxyY(r), G = XYZ::fromxyY(g), B = XYZ::fromxyY(b);
+
+    SquareMatrix<3> rgb(R.X, G.X, B.X, R.Y, G.Y, B.Y, R.Z, G.Z, B.Z);
+    XYZ C = invertOrExit(rgb) * W;
+    XYZFromRGB = rgb * SquareMatrix<3>::diag(C[0], C[1], C[2]);
+    RGBFromXYZ = invertOrExit(XYZFromRGB);
+}
+
+PiecewiseLinearSpectrum *illumd65;
+const RGBColorSpace *RGBColorSpace::DCI_P3;
+const RGBToSpectrumTable *RGBToSpectrumTable::DCI_P3;
+
+extern const int DCI_P3ToSpectrumTable_Res;
+extern const float DCI_P3ToSpectrumTable_Scale[64];
+extern const RGBToSpectrumTable::CoefficientArray DCI_P3ToSpectrumTable_Data;
+
 void spectrumInit() {
     PiecewiseLinearSpectrum xpls(CIE_lambda, CIE_X);
-    x = new DenselySampledSpectrum(&xpls);
+    Spectra::x = new DenselySampledSpectrum(xpls);
 
     PiecewiseLinearSpectrum ypls(CIE_lambda, CIE_Y);
-    y = new DenselySampledSpectrum(&ypls);
+    Spectra::y = new DenselySampledSpectrum(ypls);
 
     PiecewiseLinearSpectrum zpls(CIE_lambda, CIE_Z);
-    z = new DenselySampledSpectrum(&zpls);
+    Spectra::z = new DenselySampledSpectrum(zpls);
+
+    illumd65 = PiecewiseLinearSpectrum::fromInterleaved(CIE_Illum_D65, true);
+    RGBToSpectrumTable::DCI_P3 = 
+        new RGBToSpectrumTable(DCI_P3ToSpectrumTable_Scale,
+                               &DCI_P3ToSpectrumTable_Data);
+
+    RGBColorSpace::DCI_P3 = 
+        new RGBColorSpace(Point2f(.68, .32), Point2f(.265, .690), Point2f(.15, .06),
+                          illumd65, RGBToSpectrumTable::DCI_P3);
 }
 
 std::string SampledWavelengths::toString() const {
