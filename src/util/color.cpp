@@ -1,4 +1,5 @@
 #include "color.hpp"
+#include "util/log.hpp"
 
 // parse from 
 constexpr int nCIESamples = 471;
@@ -414,10 +415,49 @@ RGBColorSpace::RGBColorSpace(Point2f r, Point2f g, Point2f b, Spectrum *illumina
     w = W.xy();
     XYZ R = XYZ::fromxyY(r), G = XYZ::fromxyY(g), B = XYZ::fromxyY(b);
 
-    SquareMatrix<3> rgb(R.X, G.X, B.X, R.Y, G.Y, B.Y, R.Z, G.Z, B.Z);
+    /* [From PBRT (https://pbr-book.org/4ed/Radiometry,_Spectra,_and_Color/Color)]
+     * We want a matrix M such that
+     *
+     * | x_lambda |     | r |
+     * | y_lambda | = M | g |
+     * | z_lambda |     | b |
+     * 
+     * Which can be found by considering the relationship between the RGB triplet (1, 1, 1)
+     * and the whitepoint in the XYZ coordinates, which is available in W.
+     * In this case, we know that w_x_lambda must be proportional to the sum of the x_lambda
+     * coordinates of the RGB primaries, since we are considering the case of a (1, 1, 1) RGB
+     *
+     * | w_x_lambda |   | r_x_lambda g_x_lambda b_x_lambda | | c_r |
+     * | w_y_lambda | = | r_y_lambda g_y_lambda b_y_lambda | | c_g |
+     * | w_z_lambda |   | r_z_lambda g_z_lambda b_z_lambda | | c_b |
+     * 
+     * To find unknowns c, we multiply the whitepoint XYZ coordinates by the inverse of the
+     * remaining matrix and inverting that matrix. This gives us the RGB to XYZ matrix
+     */
+    SquareMatrix<3> rgb(R.X, G.X, B.X,
+                        R.Y, G.Y, B.Y,
+                        R.Z, G.Z, B.Z);
     XYZ C = invertOrExit(rgb) * W;
     XYZFromRGB = rgb * SquareMatrix<3>::diag(C[0], C[1], C[2]);
     RGBFromXYZ = invertOrExit(XYZFromRGB);
+}
+
+XYZ sampledSpectrumToXYZ(const SampledSpectrum& s,
+                         const SampledWavelengths& lambda) {
+    Float X = 0, Y = 0, Z = 0;
+    auto pdf = lambda.PDF();
+
+    for (int i = 0; i < nSpectrumSamples; ++i) {
+        Float p = pdf[i];
+        Float l = lambda[i];
+
+        X += s[i] * Spectra::X()(l) / p;
+        Y += s[i] * Spectra::Y()(l) / p;
+        Z += s[i] * Spectra::Z()(l) / p;
+    }
+
+    Float invN = 1.f / nSpectrumSamples;
+    return XYZ(X * invN, Y * invN, Z * invN) / CIE_Y_integral;
 }
 
 PiecewiseLinearSpectrum *illumd65;
@@ -443,6 +483,8 @@ void spectrumInit() {
         new RGBToSpectrumTable(DCI_P3ToSpectrumTable_Scale,
                                &DCI_P3ToSpectrumTable_Data);
 
+    // the chromacities for DCI P3 are found in 
+    // https://registry.color.org/rgb-registry/dcip3
     RGBColorSpace::DCI_P3 = 
         new RGBColorSpace(Point2f(.68, .32), Point2f(.265, .690), Point2f(.15, .06),
                           illumd65, RGBToSpectrumTable::DCI_P3);

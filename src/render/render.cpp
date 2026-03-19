@@ -1,4 +1,5 @@
 #include "render.hpp"
+#include "util/color.hpp"
 #include "util/log.hpp"
 #include <OpenImageIO/imageio.h>
 #include <cstddef>
@@ -30,11 +31,25 @@ void renderThread(const Scene &scene, const Bounds2<int> &t, int W, int H, int C
 
     for (int y = t[0].y; y < t[1].y; ++y) {
         for (int x = t[0].x; x < t[1].x; ++x) {
-            color pixel_color(0, 0, 0);
+            RGB rgb(.7f, .2f, .3f);
+            XYZ xyz_direct = RGBColorSpace::DCI_P3->ToXYZ(rgb);
+            RGB rgb_direct = RGBColorSpace::DCI_P3->ToRGB(xyz_direct);
+            RGBIlluminantSpectrum spec(*RGBColorSpace::DCI_P3, rgb);
+            Float u = 0.07f;
+            SampledWavelengths lambda = SampledWavelengths::sampleUniform(u);
+            SampledSpectrum sampled = spec.sample(lambda);
+            XYZ xyz_mc = sampledSpectrumToXYZ(sampled, lambda);
+            RGB outRGB = RGBColorSpace::DCI_P3->ToRGB(xyz_mc);
+
+            color pixel_color(outRGB.r, outRGB.g, outRGB.b);
+            //color pixel_color(rgb.r, rgb.g, rgb.b);
+            //color pixel_color(rgb_direct.r, rgb_direct.g, rgb_direct.b);
+            /*
             for (int sample = 0; sample < cam.samples_per_pixel; ++sample) {
                 Ray r = cam.get_ray(x, y);
                 pixel_color += cam.ray_color(r, scene.world);
             }
+            */
             write_color(film, cam.pixel_samples_scale*pixel_color, (y*W+x) * C);
         }
     }

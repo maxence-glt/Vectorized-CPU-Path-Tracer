@@ -1,7 +1,9 @@
+#include "render/render.hpp"
 #include "util/color.hpp"
 #include "util/log.hpp"
 #include "util/profiler.hpp"
 #include "util/color.hpp"
+#include "worlds/worlds.hpp"
 #include <OpenImageIO/imageio.h>
 #include <unistd.h>
 
@@ -28,33 +30,17 @@ int main() {
     spectrumInit();
     auto s = sample_start("main");
 
-    //render(manyBalls());
+    render(manyBalls());
     //SampledWavelengths lambda = SampledWavelengths::sampleUniform(0.5f);
     
-    Float wavelength = 600;
+    Float wavelength = 450;
     LOG_DEBUG("wavelgnth={}", wavelength);
     LOG_DEBUG("Spectral value = {}", (*illumd65)(wavelength));
     LOG_DEBUG("X value = {}", Spectra::X()(wavelength));
     LOG_DEBUG("Y value = {}", Spectra::Y()(wavelength));
     LOG_DEBUG("Z value = {}", Spectra::Z()(wavelength));
 
-    RGB rgb(0.588f, 0.509f, 0.784f);
-    RGBSigmoidPolynomial poly = RGBColorSpace::DCI_P3->ToRGBCoeffs(rgb);
-    Float sDistribution = poly(wavelength);
-    LOG_DEBUG("{}", sDistribution);
 
-    SampledWavelengths swl = SampledWavelengths::sampleUniform(0.37f);
-    SampledSpectrum spec = SampleRGBSpectrum(RGBColorSpace::DCI_P3, rgb, swl);
-    LOG_DEBUG("swl[0]={} spec[0]={}", swl[0], spec[0]);
-
-    XYZ xyz = RGBColorSpace::DCI_P3->ToXYZ(rgb);
-    LOG_DEBUG("X value from RGB = {}", xyz.X);
-    LOG_DEBUG("Y value from RGB = {}", xyz.Y);
-    LOG_DEBUG("Z value from RGB = {}", xyz.Z);
-
-    LOG_DEBUG("X value from RGB (gamma corrected) = {}", srgbToLinear(xyz.X));
-    LOG_DEBUG("Y value from RGB (gamma corercted) = {}", srgbToLinear(xyz.Y));
-    LOG_DEBUG("Z value from RGB (gamma corrected) = {}", srgbToLinear(xyz.Z));
 
     profiler.print(true);
     sample_end(s.release());
